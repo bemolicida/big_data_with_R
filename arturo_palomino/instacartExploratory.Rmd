@@ -8,8 +8,8 @@ output:
 
 
 ```{r}
-install.packages("RSQLite")
-install.packages("ggthemes")
+# install.packages("RSQLite")
+# install.packages("ggthemes")
 source("readDataToMemory.R")
 readInstacart()
 
@@ -17,7 +17,7 @@ library(DBI)
 library(ggplot2)
 library(ggthemes)
 
-//esto es hive
+# //esto es hive
 
 src_tbls(sc)
 ```
@@ -223,6 +223,22 @@ dbGetQuery(sc, "select order_id, count(1) as product_id from order_products__pri
  
 ```
 
+
+```{r}
+dbGetQuery(sc,
+           "select  n_products, count(distinct order_id) as n_orders  from ( select order_id, count(1) as n_products from order_products__prior_tbl group by order_id) op
+           group by n_products") %>% ggplot(aes(n_products, n_orders)) + geom_bar(stat='identity')+ theme_minimal() 
+
+dbGetQuery(sc,
+           "select  n_products, count(distinct order_id) as n_orders  from ( select order_id, count(1) as n_products from order_products__prior_tbl group by order_id) op
+           group by n_products having n_orders>1000") %>% ggplot(aes(n_products, n_orders)) + geom_col(fill="darkorange")+ theme_minimal() 
+
+order_products__prior %>%
+  group_by(order_id) %>% summarise(n_products=n()) %>% group_by(n_products) %>% filter(n_products<=50) %>%
+  summarise(n_orders=n()) %>% collect()%>% ggplot(aes(n_products, n_orders)) + geom_col(fill="darkorange")+ theme_minimal() 
+
+```
+
 ```{r]
 * What is the most popular department? 
 ```
@@ -279,6 +295,9 @@ product_times_ordered_txt %>%
   cat
 ```
 ```{r}
+
+data <- list(productId = 1)
+
 product_times_ordered_txt %>%
   whisker.render(data) %>%
   dbGetQuery(sc, .) %>%
@@ -289,8 +308,104 @@ product_times_ordered_txt %>%
 
 ## Questions
 
-* For given department, plot the most popular product (with templating department).
-* For given day, rank department popularity.
+* For given department, give a list of th 10  the most popular product (with templating department).
+* For given day of the week, rank department popularity.
+
+## More on orders (Window Functions)
+
+
+```{r}
+dbGetQuery(sc,"SELECT * FROM ORDER_PRODUCTS__PRIOR_TBL LIMIT 10")
+dbGetQuery(sc,"SELECT * FROM ORDERS_TBL LIMIT 10")
+dbGetQuery(sc,"SELECT * FROM PRODUCTS_TBL LIMIT 10")
+
+```
+
+
+```{r}
+# * For given department, give a list of th 10  the most popular product (with templating department).
+
+# dbGetQuery(sc,"
+txt<-          "SELECT x.*, y.product_name,y.department_id from
+           (select a.product_id as product_id, a.freq from 
+                (select product_id, sum(reordered) as freq from 
+                      order_products__prior_tbl where reordered>0 group by product_id ) a ORDER BY FREQ DESC ) x
+          inner join (select * from products_tbl) as y on x.product_id=y.product_id WHERE y.department_id= {{depid}} limit 10"
+
+data <- list(depid = 19)
+
+txt %>%
+  whisker.render(data) %>%
+  cat
+
+txt %>%
+  whisker.render(data) %>%
+  dbGetQuery(sc, .) 
+
+```
+
+```{r}
+dbGetQuery(sc,"SELECT * FROM ORDER_PRODUCTS__PRIOR_TBL LIMIT 10")
+dbGetQuery(sc,"SELECT * FROM ORDERS_TBL LIMIT 10")
+dbGetQuery(sc,"SELECT * FROM PRODUCTS_TBL LIMIT 10")
+
+```
+
+```{r}
+# * For given day of the week, rank department popularity.
+
+# dbGetQuery(sc,"
+txt<-          "select a.* from order_products__prior_tbl as a inner join orders_tbl as b inner join products_tbl as c 
+                on a.order_id=b.order_id and a.product_id=c.product_id limit 10"
+
+txt%>%dbGetQuery(sc, .) 
+# data <- list(depid = 19)
+# 
+# txt %>%
+#   whisker.render(data) %>%
+#   cat
+# 
+# txt %>%
+#   whisker.render(data) %>%
+#   dbGetQuery(sc, .) 
+
+```
+
+```{r}
+dbGetQuery(sc, 
+"
+SELECT days_since_prior_order
+,   COUNT(1) AS N
+FROM orders_tbl
+GROUP BY days_since_prior_order
+") 
+```
+
+
+```{r}
+dbGetQuery(sc, 
+"SELECT * 
+FROM orders_tbl
+WHERE user_id <= 10
+")
+```
+
+```{r}
+dbGetQuery(sc, 
+"SELECT user_id
+,   order_id
+,   FIRST_VALUE(order_id)  OVER(partition by user_id ORDER BY order_number) AS first_order
+FROM orders_tbl
+WHERE user_id <= 10 
+")
+```
+
+
+
+
+
+
+
 
 ## More on orders (Window Functions)
 
@@ -323,4 +438,162 @@ FROM orders_tbl
 WHERE user_id <= 10 
 ")
 ```
+* Product that is usually orders in numerous baskets
 
+```{r}
+"
+SELECT product_id
+,   AVG(products_number) AS avg_products_number
+FROM (
+    SELECT order_id
+    ,   product_id
+    ,   COUNT(product_id)  OVER(partition by order_id) AS products_number
+    FROM order_products__train_tbl
+) pn
+GROUP BY product_id
+ORDER BY avg_products_number DESC
+LIMIT 100
+" %>%
+dbGetQuery(sc, .)
+```
+
+```{r}
+
+# could modify the query and add product name?
+"
+select a.*, b.product_name  from (SELECT product_id
+,   AVG(products_number) AS avg_products_number
+FROM (
+    SELECT order_id
+    ,   product_id
+    ,   COUNT(product_id)  OVER(partition by order_id) AS products_number
+    FROM order_products__train_tbl
+) pn
+GROUP BY product_id
+ORDER BY avg_products_number DESC) as a 
+inner join 
+(select * from products_tbl) as b on a.product_id=b.product_id
+LIMIT 100
+" %>%
+dbGetQuery(sc, .) 
+```
+
+
+```{r}
+
+# products that is usually orders in small baskets
+"
+select a.*, b.product_name  from (SELECT product_id
+,   AVG(products_number) AS avg_products_number
+FROM (
+    SELECT order_id
+    ,   product_id
+    ,   COUNT(product_id)  OVER(partition by order_id) AS products_number
+    FROM order_products__train_tbl
+) pn
+GROUP BY product_id
+ORDER BY avg_products_number ASC) as a 
+LEFT join 
+(select * from products_tbl) as b on a.product_id=b.product_id
+LIMIT 100
+" %>%
+dbGetQuery(sc, .) 
+```
+```{r}
+
+dbGetQuery(sc, 
+"SELECT * FROM ORDERS_TBL LIMIT 10")
+
+
+dbGetQuery(sc, 
+"SELECT * FROM order_products__train_tbl limit 100")
+
+
+dbGetQuery(sc, 
+"SELECT user_id
+,   order_id
+,   FIRST_VALUE(order_id)  OVER(partition by user_id ORDER BY order_number) AS first_order
+FROM orders_tbl
+WHERE user_id <= 10 
+")
+```
+
+
+* Could modify the query and add prduct name?
+
+```{r]}
+# For 10 first users (in all their orders) find days since first order
+
+"
+select a.*, b.product_name  from (SELECT product_id
+,   AVG(products_number) AS avg_products_number
+FROM (
+    SELECT order_id
+    ,   product_id
+    ,   COUNT(product_id)  OVER(partition by order_id) AS products_number
+    FROM order_products__train_tbl
+) pn
+GROUP BY product_id
+ORDER BY avg_products_number ASC) as a 
+LEFT join 
+(select * from products_tbl) as b on a.product_id=b.product_id
+LIMIT 100
+" %>%
+dbGetQuery(sc, .) 
+```
+
+
+```{r}
+
+# * Could modify the query and add product name?
+
+# * Product that is usually orders in small baskets.
+
+# * For 10 first users and all their orders find days since first order.
+```
+
+```{r}
+orders %>%
+  filter(user_id <= 10) %>%
+  select(user_id, order_number, days_since_prior_order) %>%
+  arrange(user_id, order_number) %>%
+  mutate(days_since_first_order = cumsum(days_since_prior_order)) %>%
+  mutate(days_since_first_order=ifelse(is.null(days_since_prior_order), 0, days_since_first_order))
+```
+
+
+```{r}
+# https://cwiki.apache.org/confluence/display/Hive/LanguageManual+WindowingAndAnalytics
+
+
+"SELECT 
+user_id
+, days_since_prior_order
+, sum(days_since_prior_order) 
+OVER (PARTITION BY user_id ORDER BY order_number ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as days_since_first_order, order_number
+FROM orders_tbl where 
+user_id<=10 
+order by user_id, 
+order_number" %>% dbGetQuery(sc,.)
+
+"SELECT 
+user_id
+, days_since_prior_order
+, COALESCE( sum(days_since_prior_order) 
+OVER (PARTITION BY user_id ORDER BY order_number ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),0) as days_since_first_order, order_number
+FROM orders_tbl where 
+user_id<=10 
+order by user_id, 
+order_number" %>% dbGetQuery(sc,.)
+
+"SELECT 
+user_id
+, days_since_prior_order
+, COALESCE( sum(days_since_prior_order) 
+OVER (PARTITION BY user_id ORDER BY order_number ),0) as days_since_first_order, order_number
+FROM orders_tbl where 
+user_id<=10 
+order by user_id, 
+order_number" %>% dbGetQuery(sc,.)
+
+``` 

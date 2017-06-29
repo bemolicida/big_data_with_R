@@ -12,16 +12,9 @@ readFootball()
 library(ggplot2)
 library(ggthemes)
 
-##print(dbListTables(con))
+print(dbListTables(sql_con))
 ```
 
-```
-select ~ SELECT
-filter ~ WHERE
-arrange ~ ORDER
-summarise ~ aggregators: sum, min, sd, etc.
-mutate ~ operators: +, *, log, etc.
-```
 ## Pipes
 
 ```{r}
@@ -33,9 +26,13 @@ players %>%
 players %>%
   colnames
 ```
+
 ```{r}
 players %>%
   sapply(class)
+
+sapply(players, class)
+class%>% sapply(players,.) # para pasar un segundo argumento le pones el punto.
 ```
 
 
@@ -46,6 +43,15 @@ players %>%
 players %>%
   head %>%
   select(player_name, birthday)
+```
+
+```{r}
+dbGetQuery(sql_con, "
+SELECT player_name
+,   birthday
+FROM Player
+LIMIT 6
+")
 ```
 
 ## WHERE ~ filter
@@ -79,6 +85,16 @@ players %>%
   summarise(weight=mean(weight_kg), height=mean(height))
 ```
 
+```{r}
+dbGetQuery(sql_con, "
+SELECT    avg(weight*0.45359237) as weight, avg(height) as height
+FROM Player
+LIMIT 6
+")
+
+
+```
+
 ## GROUP BY
 
 ```{r}
@@ -89,7 +105,23 @@ players %>%
   ggplot(aes(year, weight)) +
   geom_line(colour="darkorange") +
   theme_minimal()
+
 ```
+
+```{r}
+test<-dbGetQuery(sql_con, "
+SELECT    substr(birthday,1,4) as year, avg(height) as weight
+FROM Player group by substr(birthday,1,4)
+LIMIT 6
+") 
+  
+ggplot(test, aes(year, weight )) + geom_line() +
+    geom_point()
+  
+ggplot(test, aes(year, weight )) + geom_line(colour="darkorange") +
+  theme_minimal() +geom_point()
+```
+
 ```{r}
 players %>%
   mutate(year=as.numeric(substring(birthday, 1, 4))) %>%
@@ -104,9 +136,88 @@ players %>%
 players %>%
   mutate(year=as.numeric(substring(birthday, 1, 4))) %>%
   group_by(year) %>%
-  summarise(weight=mean(height), nsamples=n()) %>%
+  summarise(height=mean(height), nsamples=n()) %>%
   filter(nsamples >= 200) %>%
-  ggplot(aes(year, weight)) +
+  ggplot(aes(year, height)) +
   geom_line(colour="darkorange") +
   theme_minimal()
+```
+
+```{r}
+dbGetQuery(sql_con, "
+SELECT    substr(birthday,1,4) as year, avg(height) as height 
+FROM Player 
+group by year
+having count( height) >=200
+") 
+
+```
+
+Exercise
+
+* Translate from SQL to dply or from dply to SQL
+```{r}
+
+
+dbGetQuery(sql_con, "
+SELECT *
+FROM Match
+LIMIT 6
+")
+```
+
+```{r}
+games %>% head(6)
+```
+
+```{r}
+dbGetQuery(sql_con, "
+SELECT country_id
+,   COUNT(1) AS n
+FROM Match
+GROUP BY country_id
+ORDER BY n DESC
+")
+```
+
+```{r}
+games %>%  group_by(country_id) %>%
+  summarise(n=n()) %>% arrange(-n)
+```
+
+
+```{r}
+games %>%
+  left_join(countries, by=c("country_id" = "id")) %>%
+  select(name, home_team_api_id) %>%
+  group_by(name) %>%
+  summarise(teams = n_distinct(home_team_api_id)) %>%
+  arrange(desc(teams))
+```
+
+```{r}
+dbGetQuery(sql_con, "
+SELECT *
+FROM Player_Attributes
+LIMIT 6
+")
+
+```
+
+* From where do players with higest accuracy come from?
+
+* Add team name and translate to dplyr
+
+```{r}
+dbGetQuery(sql_con, "
+SELECT stage, home_team_api_id, home_team_goal
+FROM Match
+WHERE country_id = 1
+AND season = '2008/2009'
+ORDER BY stage
+")
+
+countries
+class(countries)
+players %>% head
 ```
