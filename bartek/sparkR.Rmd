@@ -10,6 +10,10 @@ source('configuration.R')
 library(ggplot2)
 ```
 
+```{r}
+sc$spark_home
+```
+
 
 ```{r}
 source("readDataToMemory.R")
